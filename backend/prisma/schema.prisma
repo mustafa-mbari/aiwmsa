@@ -1,0 +1,316 @@
+// This is your Prisma schema file
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Enums
+enum UserRole {
+  ADMIN
+  EXPERT
+  WORKER
+}
+
+enum DocumentStatus {
+  PENDING
+  PROCESSING
+  READY
+  FAILED
+}
+
+enum DocumentType {
+  PROCEDURE
+  TROUBLESHOOTING
+  POLICY
+  MANUAL
+  GUIDE
+  OTHER
+}
+
+enum Language {
+  EN
+  AR
+  DE
+}
+
+// User Management
+model User {
+  id                String      @id @default(uuid())
+  email             String      @unique
+  username          String      @unique
+  password          String
+  role              UserRole    @default(WORKER)
+  firstName         String      @map("first_name")
+  lastName          String      @map("last_name")
+  preferredLanguage Language    @default(EN) @map("preferred_language")
+  department        String?
+  warehouseId       String?     @map("warehouse_id")
+  isActive          Boolean     @default(true) @map("is_active")
+  lastLogin         DateTime?   @map("last_login")
+  createdAt         DateTime    @default(now()) @map("created_at")
+  updatedAt         DateTime    @updatedAt @map("updated_at")
+
+  // Relations
+  warehouse        Warehouse?             @relation(fields: [warehouseId], references: [id])
+  sessions         Session[]
+  uploadedDocs     Document[]             @relation("UploadedDocuments")
+  queries          Query[]
+  feedbacks        Feedback[]
+  documentReviews  DocumentReview[]
+  notifications    Notification[]
+
+  @@index([email])
+  @@index([role])
+  @@index([warehouseId])
+  @@map("users")
+}
+
+model Session {
+  id           String    @id @default(uuid())
+  userId       String    @map("user_id")
+  token        String    @unique
+  refreshToken String?   @unique @map("refresh_token")
+  userAgent    String?   @map("user_agent")
+  ipAddress    String?   @map("ip_address")
+  expiresAt    DateTime  @map("expires_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@index([refreshToken])
+  @@index([userId])
+  @@map("sessions")
+}
+
+// Warehouse Management
+model Warehouse {
+  id          String   @id @default(uuid())
+  code        String   @unique
+  name        String
+  location    String?
+  description String?
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  users     User[]
+  documents Document[]
+
+  @@map("warehouses")
+}
+
+// Document Management
+model Document {
+  id             String         @id @default(uuid())
+  title          String
+  description    String?
+  fileName       String         @map("file_name")
+  filePath       String         @map("file_path")
+  fileSize       Int            @map("file_size")
+  mimeType       String         @map("mime_type")
+  status         DocumentStatus @default(PENDING)
+  type           DocumentType   @default(OTHER)
+  language       Language       @default(EN)
+  version        Int            @default(1)
+  uploadedById   String         @map("uploaded_by_id")
+  warehouseId    String?        @map("warehouse_id")
+  processingError String?       @map("processing_error")
+  processedAt    DateTime?      @map("processed_at")
+  createdAt      DateTime       @default(now()) @map("created_at")
+  updatedAt      DateTime       @updatedAt @map("updated_at")
+
+  // Relations
+  uploadedBy User              @relation("UploadedDocuments", fields: [uploadedById], references: [id])
+  warehouse  Warehouse?        @relation(fields: [warehouseId], references: [id])
+  chunks     DocumentChunk[]
+  metadata   DocumentMetadata?
+  reviews    DocumentReview[]
+  queries    QueryDocument[]
+  tags       DocumentTag[]
+
+  @@index([status])
+  @@index([type])
+  @@index([uploadedById])
+  @@index([warehouseId])
+  @@map("documents")
+}
+
+model DocumentMetadata {
+  id           String   @id @default(uuid())
+  documentId   String   @unique @map("document_id")
+  category     String?
+  subCategory  String?  @map("sub_category")
+  keywords     String[]
+  errorCodes   String[] @map("error_codes")
+  equipmentIds String[] @map("equipment_ids")
+  departments  String[]
+  importance   Int      @default(5) // 1-10 scale
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@map("document_metadata")
+}
+
+model DocumentChunk {
+  id           String   @id @default(uuid())
+  documentId   String   @map("document_id")
+  content      String   @db.Text
+  chunkIndex   Int      @map("chunk_index")
+  startPage    Int?     @map("start_page")
+  endPage      Int?     @map("end_page")
+  tokenCount   Int      @map("token_count")
+  embeddingId  String?  @unique @map("embedding_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  // Relations
+  document  Document   @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  embedding Embedding? @relation(fields: [embeddingId], references: [id])
+
+  @@unique([documentId, chunkIndex])
+  @@index([documentId])
+  @@map("document_chunks")
+}
+
+model Embedding {
+  id        String   @id @default(uuid())
+  chunkId   String?  @unique @map("chunk_id")
+  vector    Float[]  @map("vector")
+  model     String   @default("text-embedding-ada-002")
+  dimension Int      @default(1536)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  chunk DocumentChunk?
+
+  @@map("embeddings")
+}
+
+// Query and Search
+model Query {
+  id            String   @id @default(uuid())
+  userId        String   @map("user_id")
+  queryText     String   @map("query_text") @db.Text
+  language      Language @default(EN)
+  responseText  String?  @map("response_text") @db.Text
+  confidence    Float?
+  responseTime  Int?     @map("response_time") // in milliseconds
+  isSuccessful  Boolean  @default(false) @map("is_successful")
+  errorMessage  String?  @map("error_message")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  // Relations
+  user      User             @relation(fields: [userId], references: [id])
+  documents QueryDocument[]
+  feedback  Feedback?
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("queries")
+}
+
+model QueryDocument {
+  id           String   @id @default(uuid())
+  queryId      String   @map("query_id")
+  documentId   String   @map("document_id")
+  relevanceScore Float  @map("relevance_score")
+  rank         Int
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  // Relations
+  query    Query    @relation(fields: [queryId], references: [id], onDelete: Cascade)
+  document Document @relation(fields: [documentId], references: [id])
+
+  @@unique([queryId, documentId])
+  @@map("query_documents")
+}
+
+// Feedback System
+model Feedback {
+  id         String   @id @default(uuid())
+  queryId    String   @unique @map("query_id")
+  userId     String   @map("user_id")
+  rating     Int      // 1-5 or thumbs up/down (-1, 1)
+  helpful    Boolean?
+  resolved   Boolean?
+  comment    String?  @db.Text
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  // Relations
+  query Query @relation(fields: [queryId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([rating])
+  @@map("feedbacks")
+}
+
+// Document Review System
+model DocumentReview {
+  id         String   @id @default(uuid())
+  documentId String   @map("document_id")
+  reviewerId String   @map("reviewer_id")
+  status     String   // approved, rejected, needs_revision
+  comment    String?  @db.Text
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  // Relations
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  reviewer User     @relation(fields: [reviewerId], references: [id])
+
+  @@unique([documentId, reviewerId])
+  @@map("document_reviews")
+}
+
+// Tags System
+model Tag {
+  id        String        @id @default(uuid())
+  name      String        @unique
+  category  String?
+  createdAt DateTime      @default(now()) @map("created_at")
+
+  // Relations
+  documents DocumentTag[]
+
+  @@map("tags")
+}
+
+model DocumentTag {
+  id         String   @id @default(uuid())
+  documentId String   @map("document_id")
+  tagId      String   @map("tag_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  // Relations
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  tag      Tag      @relation(fields: [tagId], references: [id])
+
+  @@unique([documentId, tagId])
+  @@map("document_tags")
+}
+
+// Notifications
+model Notification {
+  id         String   @id @default(uuid())
+  userId     String   @map("user_id")
+  title      String
+  message    String   @db.Text
+  type       String   // info, warning, error, success
+  isRead     Boolean  @default(false) @map("is_read")
+  readAt     DateTime? @map("read_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+  @@map("notifications")
+}

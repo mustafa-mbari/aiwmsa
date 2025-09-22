@@ -1,0 +1,79 @@
+version: '3.9'
+
+services:
+  # PostgreSQL with pgvector
+  postgres:
+    image: pgvector/pgvector:pg15
+    container_name: aiwmsa_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: aiwmsa_user
+      POSTGRES_PASSWORD: aiwmsa_password
+      POSTGRES_DB: aiwmsa_db
+      PGDATA: /data/postgres
+    volumes:
+      - postgres_data:/data/postgres
+      - ./backend/prisma/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    networks:
+      - aiwmsa_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aiwmsa_user -d aiwmsa_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for caching and sessions
+  redis:
+    image: redis:7-alpine
+    container_name: aiwmsa_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass aiwmsa_redis_password
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - aiwmsa_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Adminer for database management (optional)
+  adminer:
+    image: adminer
+    container_name: aiwmsa_adminer
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    networks:
+      - aiwmsa_network
+    depends_on:
+      - postgres
+
+  # Redis Commander for Redis management (optional)
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: aiwmsa_redis_commander
+    restart: unless-stopped
+    environment:
+      - REDIS_HOSTS=local:redis:6379:0:aiwmsa_redis_password
+    ports:
+      - "8081:8081"
+    networks:
+      - aiwmsa_network
+    depends_on:
+      - redis
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  aiwmsa_network:
+    driver: bridge
