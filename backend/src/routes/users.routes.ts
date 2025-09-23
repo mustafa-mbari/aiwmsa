@@ -305,13 +305,23 @@ router.delete(
         throw new AppError('Cannot delete your own account', 400);
       }
 
+      // Check if user exists
+      const user = await prisma.user.findUnique({
+        where: { id },
+        select: { email: true },
+      });
+
+      if (!user) {
+        throw new AppError('User not found', 404);
+      }
+
       // Soft delete by setting isActive to false
       await prisma.user.update({
         where: { id },
         data: { isActive: false },
       });
 
-      logger.info(`User deactivated: ${id} by ${requestingUser.email}`);
+      logger.info(`User deactivated: ${user.email} by ${requestingUser.email}`);
 
       res.json({
         success: true,
@@ -343,6 +353,16 @@ router.post(
       const { id } = req.params;
       const { newPassword } = req.body;
 
+      // Check if user exists
+      const user = await prisma.user.findUnique({
+        where: { id },
+        select: { email: true },
+      });
+
+      if (!user) {
+        throw new AppError('User not found', 404);
+      }
+
       const hashedPassword = await bcrypt.hash(newPassword, 10);
 
       await prisma.user.update({
@@ -350,7 +370,7 @@ router.post(
         data: { password: hashedPassword },
       });
 
-      logger.info(`Password reset for user ${id} by ${req.user!.email}`);
+      logger.info(`Password reset for user ${user.email} by ${req.user!.email}`);
 
       res.json({
         success: true,
@@ -369,7 +389,7 @@ router.get(
   authorize([UserRole.ADMIN]),
   async (req, res, next) => {
     try {
-      const [totalUsers, activeUsers, usersByRole, usersByWarehouse] = await Promise.all([
+      const [totalUsers, activeUsers, usersByRole, usersByWarehouse, recentUsers] = await Promise.all([
         prisma.user.count(),
         prisma.user.count({ where: { isActive: true } }),
         prisma.user.groupBy({
@@ -380,7 +400,27 @@ router.get(
           by: ['warehouseId'],
           _count: { warehouseId: true },
         }),
+        prisma.user.findMany({
+          take: 5,
+          orderBy: { createdAt: 'desc' },
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            role: true,
+            createdAt: true,
+          },
+        }),
       ]);
+
+      // Get warehouse names for statistics
+      const warehouseIds = [...new Set(usersByWarehouse.map(item => item.warehouseId).filter(Boolean))];
+      const warehouses = await prisma.warehouse.findMany({
+        where: { id: { in: warehouseIds as string[] } },
+        select: { id: true, name: true, code: true },
+      });
+
+      const warehouseMap = new Map(warehouses.map(w => [w.id, w]));
 
       res.json({
         success: true,
@@ -391,12 +431,98 @@ router.get(
           usersByRole: usersByRole.map(item => ({
             role: item.role,
             count: item._count.role,
+            percentage: Math.round((item._count.role / totalUsers) * 100),
           })),
           usersByWarehouse: usersByWarehouse.map(item => ({
             warehouseId: item.warehouseId,
+            warehouseName: item.warehouseId ? warehouseMap.get(item.warehouseId)?.name : 'Unassigned',
             count: item._count.warehouseId,
           })),
+          recentUsers,
+          growth: {
+            daily: 2, // Mock data - implement actual calculation
+            weekly: 5,
+            monthly: 12,
+          },
         },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// Bulk operations (Admin only)
+router.post(
+  '/bulk',
+  authenticate,
+  authorize([UserRole.ADMIN]),
+  validateRequest(
+    z.object({
+      body: z.object({
+        action: z.enum(['activate', 'deactivate', 'delete', 'changeRole']),
+        userIds: z.array(z.string().uuid()),
+        data: z.object({
+          role: z.nativeEnum(UserRole).optional(),
+        }).optional(),
+      }),
+    })
+  ),
+  async (req, res, next) => {
+    try {
+      const { action, userIds, data } = req.body;
+      const requestingUser = req.user!;
+
+      // Prevent self-modification in bulk operations
+      if (userIds.includes(requestingUser.id)) {
+        throw new AppError('Cannot perform bulk operation on your own account', 400);
+      }
+
+      let result;
+
+      switch (action) {
+        case 'activate':
+          result = await prisma.user.updateMany({
+            where: { id: { in: userIds } },
+            data: { isActive: true },
+          });
+          break;
+        
+        case 'deactivate':
+          result = await prisma.user.updateMany({
+            where: { id: { in: userIds } },
+            data: { isActive: false },
+          });
+          break;
+        
+        case 'delete':
+          // Soft delete
+          result = await prisma.user.updateMany({
+            where: { id: { in: userIds } },
+            data: { isActive: false },
+          });
+          break;
+        
+        case 'changeRole':
+          if (!data?.role) {
+            throw new AppError('Role is required for changeRole action', 400);
+          }
+          result = await prisma.user.updateMany({
+            where: { id: { in: userIds } },
+            data: { role: data.role },
+          });
+          break;
+        
+        default:
+          throw new AppError('Invalid action', 400);
+      }
+
+      logger.info(`Bulk ${action} performed on ${result.count} users by ${requestingUser.email}`);
+
+      res.json({
+        success: true,
+        message: `Successfully ${action}d ${result.count} users`,
+        affectedCount: result.count,
       });
     } catch (error) {
       next(error);
