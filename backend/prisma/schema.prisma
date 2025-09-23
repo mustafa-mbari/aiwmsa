@@ -1,316 +1,267 @@
-// This is your Prisma schema file
+// wmlab/backend/prisma/schema.prisma
 generator client {
   provider = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
-}
-
-// Enums
-enum UserRole {
-  ADMIN
-  EXPERT
-  WORKER
-}
-
-enum DocumentStatus {
-  PENDING
-  PROCESSING
-  READY
-  FAILED
-}
-
-enum DocumentType {
-  PROCEDURE
-  TROUBLESHOOTING
-  POLICY
-  MANUAL
-  GUIDE
-  OTHER
-}
-
-enum Language {
-  EN
-  AR
-  DE
+  extensions = [pgvector(map: "vector")]
 }
 
 // User Management
 model User {
-  id                String      @id @default(uuid())
-  email             String      @unique
-  username          String      @unique
-  password          String
-  role              UserRole    @default(WORKER)
-  firstName         String      @map("first_name")
-  lastName          String      @map("last_name")
-  preferredLanguage Language    @default(EN) @map("preferred_language")
-  department        String?
-  warehouseId       String?     @map("warehouse_id")
-  isActive          Boolean     @default(true) @map("is_active")
-  lastLogin         DateTime?   @map("last_login")
-  createdAt         DateTime    @default(now()) @map("created_at")
-  updatedAt         DateTime    @updatedAt @map("updated_at")
-
-  // Relations
-  warehouse        Warehouse?             @relation(fields: [warehouseId], references: [id])
-  sessions         Session[]
-  uploadedDocs     Document[]             @relation("UploadedDocuments")
-  queries          Query[]
-  feedbacks        Feedback[]
-  documentReviews  DocumentReview[]
-  notifications    Notification[]
-
+  id              String    @id @default(uuid())
+  email           String    @unique
+  password        String
+  name            String?
+  role            Role
+  isActive        Boolean   @default(true)
+  lastLogin       DateTime?
+  profileImage    String?
+  phone           String?
+  department      Department? @relation(fields: [departmentId], references: [id])
+  departmentId    String?
+  warehouse       Warehouse?  @relation(fields: [warehouseId], references: [id])
+  warehouseId     String?
+  
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  sessions        Session[]
+  queries         Query[]
+  feedback        Feedback[]
+  uploadedDocuments Document[] @relation("UploadedDocuments")
+  
   @@index([email])
   @@index([role])
   @@index([warehouseId])
-  @@map("users")
+}
+
+enum Role {
+  Admin
+  Expert
+  Worker
 }
 
 model Session {
-  id           String    @id @default(uuid())
-  userId       String    @map("user_id")
-  token        String    @unique
-  refreshToken String?   @unique @map("refresh_token")
-  userAgent    String?   @map("user_agent")
-  ipAddress    String?   @map("ip_address")
-  expiresAt    DateTime  @map("expires_at")
-  createdAt    DateTime  @default(now()) @map("created_at")
-  updatedAt    DateTime  @updatedAt @map("updated_at")
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token       String   @unique
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+  
   @@index([token])
-  @@index([refreshToken])
   @@index([userId])
-  @@map("sessions")
 }
 
-// Warehouse Management
+// Warehouse & Department
 model Warehouse {
   id          String   @id @default(uuid())
-  code        String   @unique
   name        String
+  code        String   @unique
   location    String?
-  description String?
-  isActive    Boolean  @default(true) @map("is_active")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  isActive    Boolean  @default(true)
+  metadata    Json?
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  users       User[]
+  departments Department[]
+  documents   Document[]
+  equipment   Equipment[]
+  
+  @@index([code])
+}
 
-  // Relations
-  users     User[]
-  documents Document[]
-
-  @@map("warehouses")
+model Department {
+  id          String   @id @default(uuid())
+  name        String
+  code        String   
+  warehouseId String
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  isActive    Boolean  @default(true)
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  users       User[]
+  documents   Document[]
+  
+  @@unique([code, warehouseId])
+  @@index([warehouseId])
 }
 
 // Document Management
 model Document {
-  id             String         @id @default(uuid())
-  title          String
-  description    String?
-  fileName       String         @map("file_name")
-  filePath       String         @map("file_path")
-  fileSize       Int            @map("file_size")
-  mimeType       String         @map("mime_type")
-  status         DocumentStatus @default(PENDING)
-  type           DocumentType   @default(OTHER)
-  language       Language       @default(EN)
-  version        Int            @default(1)
-  uploadedById   String         @map("uploaded_by_id")
-  warehouseId    String?        @map("warehouse_id")
-  processingError String?       @map("processing_error")
-  processedAt    DateTime?      @map("processed_at")
-  createdAt      DateTime       @default(now()) @map("created_at")
-  updatedAt      DateTime       @updatedAt @map("updated_at")
-
-  // Relations
-  uploadedBy User              @relation("UploadedDocuments", fields: [uploadedById], references: [id])
-  warehouse  Warehouse?        @relation(fields: [warehouseId], references: [id])
-  chunks     DocumentChunk[]
-  metadata   DocumentMetadata?
-  reviews    DocumentReview[]
-  queries    QueryDocument[]
-  tags       DocumentTag[]
-
-  @@index([status])
-  @@index([type])
-  @@index([uploadedById])
+  id              String   @id @default(uuid())
+  title           String
+  description     String?
+  category        String   // SOPs, Safety, Equipment, Training, Reports, Other
+  filename        String
+  originalName    String
+  mimeType        String
+  size            BigInt
+  path            String
+  language        String   @default("en") // en, ar, de
+  isPublic        Boolean  @default(false)
+  
+  uploadedById    String
+  uploadedBy      User     @relation("UploadedDocuments", fields: [uploadedById], references: [id])
+  warehouseId     String
+  warehouse       Warehouse @relation(fields: [warehouseId], references: [id])
+  departmentId    String?
+  department      Department? @relation(fields: [departmentId], references: [id])
+  
+  status          String   @default("pending") // pending, processing, completed, failed
+  processingProgress Int?
+  processingError String?
+  extractedText   String?  // Preview of extracted text
+  metadata        Json?    // Additional metadata (tags, etc.)
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  chunks          Chunk[]
+  
   @@index([warehouseId])
-  @@map("documents")
+  @@index([category])
+  @@index([status])
+  @@index([uploadedById])
 }
 
-model DocumentMetadata {
-  id           String   @id @default(uuid())
-  documentId   String   @unique @map("document_id")
-  category     String?
-  subCategory  String?  @map("sub_category")
-  keywords     String[]
-  errorCodes   String[] @map("error_codes")
-  equipmentIds String[] @map("equipment_ids")
-  departments  String[]
-  importance   Int      @default(5) // 1-10 scale
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
-
-  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
-
-  @@map("document_metadata")
-}
-
-model DocumentChunk {
-  id           String   @id @default(uuid())
-  documentId   String   @map("document_id")
-  content      String   @db.Text
-  chunkIndex   Int      @map("chunk_index")
-  startPage    Int?     @map("start_page")
-  endPage      Int?     @map("end_page")
-  tokenCount   Int      @map("token_count")
-  embeddingId  String?  @unique @map("embedding_id")
-  createdAt    DateTime @default(now()) @map("created_at")
-
-  // Relations
-  document  Document   @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  embedding Embedding? @relation(fields: [embeddingId], references: [id])
-
-  @@unique([documentId, chunkIndex])
+// Document Chunks
+model Chunk {
+  id          String   @id @default(uuid())
+  documentId  String
+  document    Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  content     String   @db.Text
+  chunkIndex  Int
+  tokenCount  Int
+  metadata    Json?    // page number, section, type, etc.
+  
+  createdAt   DateTime @default(now())
+  
+  embeddings  Embedding[]
+  
   @@index([documentId])
-  @@map("document_chunks")
+  @@index([chunkIndex])
 }
 
+// Vector Embeddings
 model Embedding {
-  id        String   @id @default(uuid())
-  chunkId   String?  @unique @map("chunk_id")
-  vector    Float[]  @map("vector")
-  model     String   @default("text-embedding-ada-002")
-  dimension Int      @default(1536)
-  createdAt DateTime @default(now()) @map("created_at")
-
-  // Relations
-  chunk DocumentChunk?
-
-  @@map("embeddings")
+  id          String   @id @default(uuid())
+  chunkId     String
+  chunk       Chunk    @relation(fields: [chunkId], references: [id], onDelete: Cascade)
+  embedding   Unsupported("vector")?
+  model       String   // embedding model used
+  dimensions  Int
+  
+  createdAt   DateTime @default(now())
+  
+  @@index([chunkId])
 }
 
-// Query and Search
+// Equipment Management
+model Equipment {
+  id          String   @id @default(uuid())
+  name        String
+  code        String
+  type        String   // Forklift, Conveyor, Scanner, etc.
+  manufacturer String?
+  model       String?
+  serialNumber String?
+  warehouseId String
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+  status      String   @default("operational") // operational, maintenance, faulty
+  metadata    Json?
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  errorCodes  ErrorCode[]
+  maintenanceLogs MaintenanceLog[]
+  
+  @@unique([code, warehouseId])
+  @@index([warehouseId])
+  @@index([status])
+}
+
+// Error Codes Database
+model ErrorCode {
+  id          String   @id @default(uuid())
+  code        String
+  equipmentId String
+  equipment   Equipment @relation(fields: [equipmentId], references: [id])
+  description String   @db.Text
+  solution    String   @db.Text
+  severity    String   // low, medium, high, critical
+  category    String?
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@unique([code, equipmentId])
+  @@index([equipmentId])
+  @@index([severity])
+}
+
+// Maintenance Logs
+model MaintenanceLog {
+  id          String   @id @default(uuid())
+  equipmentId String
+  equipment   Equipment @relation(fields: [equipmentId], references: [id])
+  type        String   // preventive, corrective, inspection
+  description String   @db.Text
+  performedBy String?
+  scheduledAt DateTime?
+  completedAt DateTime?
+  status      String   @default("scheduled") // scheduled, in_progress, completed
+  notes       String?  @db.Text
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@index([equipmentId])
+  @@index([status])
+  @@index([scheduledAt])
+}
+
+// Query & Search
 model Query {
-  id            String   @id @default(uuid())
-  userId        String   @map("user_id")
-  queryText     String   @map("query_text") @db.Text
-  language      Language @default(EN)
-  responseText  String?  @map("response_text") @db.Text
-  confidence    Float?
-  responseTime  Int?     @map("response_time") // in milliseconds
-  isSuccessful  Boolean  @default(false) @map("is_successful")
-  errorMessage  String?  @map("error_message")
-  createdAt     DateTime @default(now()) @map("created_at")
-
-  // Relations
-  user      User             @relation(fields: [userId], references: [id])
-  documents QueryDocument[]
-  feedback  Feedback?
-
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  query       String   @db.Text
+  response    String?  @db.Text
+  context     Json?    // Retrieved chunks, metadata
+  duration    Int?     // Response time in ms
+  successful  Boolean  @default(true)
+  
+  createdAt   DateTime @default(now())
+  
+  feedback    Feedback?
+  
   @@index([userId])
   @@index([createdAt])
-  @@map("queries")
-}
-
-model QueryDocument {
-  id           String   @id @default(uuid())
-  queryId      String   @map("query_id")
-  documentId   String   @map("document_id")
-  relevanceScore Float  @map("relevance_score")
-  rank         Int
-  createdAt    DateTime @default(now()) @map("created_at")
-
-  // Relations
-  query    Query    @relation(fields: [queryId], references: [id], onDelete: Cascade)
-  document Document @relation(fields: [documentId], references: [id])
-
-  @@unique([queryId, documentId])
-  @@map("query_documents")
 }
 
 // Feedback System
 model Feedback {
-  id         String   @id @default(uuid())
-  queryId    String   @unique @map("query_id")
-  userId     String   @map("user_id")
-  rating     Int      // 1-5 or thumbs up/down (-1, 1)
-  helpful    Boolean?
-  resolved   Boolean?
-  comment    String?  @db.Text
-  createdAt  DateTime @default(now()) @map("created_at")
-
-  // Relations
-  query Query @relation(fields: [queryId], references: [id], onDelete: Cascade)
-  user  User  @relation(fields: [userId], references: [id])
-
+  id          String   @id @default(uuid())
+  queryId     String   @unique
+  query       Query    @relation(fields: [queryId], references: [id])
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  rating      Int      // 1-5 stars
+  helpful     Boolean?
+  comment     String?  @db.Text
+  
+  createdAt   DateTime @default(now())
+  
   @@index([userId])
   @@index([rating])
-  @@map("feedbacks")
-}
-
-// Document Review System
-model DocumentReview {
-  id         String   @id @default(uuid())
-  documentId String   @map("document_id")
-  reviewerId String   @map("reviewer_id")
-  status     String   // approved, rejected, needs_revision
-  comment    String?  @db.Text
-  createdAt  DateTime @default(now()) @map("created_at")
-
-  // Relations
-  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  reviewer User     @relation(fields: [reviewerId], references: [id])
-
-  @@unique([documentId, reviewerId])
-  @@map("document_reviews")
-}
-
-// Tags System
-model Tag {
-  id        String        @id @default(uuid())
-  name      String        @unique
-  category  String?
-  createdAt DateTime      @default(now()) @map("created_at")
-
-  // Relations
-  documents DocumentTag[]
-
-  @@map("tags")
-}
-
-model DocumentTag {
-  id         String   @id @default(uuid())
-  documentId String   @map("document_id")
-  tagId      String   @map("tag_id")
-  createdAt  DateTime @default(now()) @map("created_at")
-
-  // Relations
-  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  tag      Tag      @relation(fields: [tagId], references: [id])
-
-  @@unique([documentId, tagId])
-  @@map("document_tags")
-}
-
-// Notifications
-model Notification {
-  id         String   @id @default(uuid())
-  userId     String   @map("user_id")
-  title      String
-  message    String   @db.Text
-  type       String   // info, warning, error, success
-  isRead     Boolean  @default(false) @map("is_read")
-  readAt     DateTime? @map("read_at")
-  createdAt  DateTime @default(now()) @map("created_at")
-
-  // Relations
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId, isRead])
-  @@map("notifications")
 }
