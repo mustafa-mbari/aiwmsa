@@ -1,0 +1,15 @@
+// wmlab/backend/.gitignore
+node_modules/
+dist/
+.env
+.env.local
+.tsbuildinfo
+logs/
+uploads/
+*.log
+.DS_Store
+coverage/
+.nyc_output/
+*.pid
+*.seed
+*.pid.lock
